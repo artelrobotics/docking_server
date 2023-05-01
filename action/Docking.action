@@ -1,0 +1,10 @@
+#goal definition
+int32 aruco_id
+string type
+---
+#result definition
+bool done
+string result
+---
+#feedback
+string feedback
