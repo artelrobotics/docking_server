@@ -7,7 +7,7 @@ from std_msgs.msg import Empty
 
 class Docking:
 
-    def __init__(self, name='DockingServer', freq=10) -> None:
+    def __init__(self, name='DockingServer', freq=10):
         self._feedback = DockingFeedback()
         self._result = DockingResult()
         self._done = False
@@ -18,10 +18,10 @@ class Docking:
         self._cancel = False
         rospy.Subscriber('cancel', Empty, callback=self.cancel_cb)
 
-    def cancel_cb(self, msg:Empty):
+    def cancel_cb(self, msg):
         self._cancel = True
 
-    def execute_cb(self, goal: DockingGoal):
+    def execute_cb(self, goal):
         rate = rospy.Rate(self._freq)
         self._feedback.feedback = f'Docking type: {goal.type} ArucoID: {goal.aruco_id} Started'
         self._as.publish_feedback(self._feedback)
