@@ -8,7 +8,7 @@ import sys
 def docking_client():
     client = actionlib.SimpleActionClient('DockingServer', DockingAction)
     client.wait_for_server()
-    goal = DockingGoal(aruco_id=1, type='docking')
+    goal = DockingGoal(aruco_id=2, type='docking')
     client.send_goal(goal)
     client.wait_for_result()
     return client.get_result()
