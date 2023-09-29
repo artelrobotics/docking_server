@@ -20,8 +20,8 @@ class PathFollower:
         self.path_received = False
         self.waypoint_index = 0
 
-        self.kp_linear = 0.2
-        self.kd_linear = 0.1
+        self.kp_linear = 0.1
+        self.kd_linear = 0.02
         self.kp_angular = 1.0
         self.kd_angular = 0.2
 

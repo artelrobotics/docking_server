@@ -9,6 +9,7 @@ from ar_track_alvar_msgs.msg import AlvarMarkers
 from std_msgs.msg import Bool
 from tf.transformations import euler_from_quaternion
 from math import degrees, atan2, pi, sqrt, atan
+import math
 from geometry_msgs.msg import Twist , TransformStamped
 import time
 import numpy as np
@@ -18,9 +19,12 @@ from std_msgs.msg import Float64
 from nav_msgs.msg import Path, Odometry
 from robotnik_msgs.msg import BatteryStatus
 import tf2_ros
+from std_srvs.srv import SetBool
+
 class Docking:
 
     def __init__(self, name='DockingServer', freq=10):
+        self.station_points = []
         self.detection_command = Bool()
         self.goal_aruco_id = 0
         self.wheelbase = 0.3
@@ -32,9 +36,9 @@ class Docking:
         self.waypoint_index = 0
         self.pre_point_reached = False
         self.kp_linear = 0.3
-        self.kd_linear = 0.15
-        self.kp_angular = 1.0
-        self.kd_angular = 0.3
+        self.kd_linear = 0.2
+        self.kp_angular = 1.5
+        self.kd_angular = 0.1
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer)
         self.forward_bool = False
@@ -48,13 +52,53 @@ class Docking:
         
         self._cancel = False
         self._break = False
+
+        self.front_distance = Float64()
+        self._robot_back_edges = rospy.get_param('robot_front_edges', [[-0.35, 0.32], [-0.35, -0.32]])
+        self.back_obstacle_detector = False
         rospy.Subscriber('cancel', Empty, callback=self.cancel_cb)
         rospy.Subscriber('/leo_bot/docking_path/plan/fiducial_1', Path, callback=self.path_callback_fiducial_1)
         rospy.Subscriber('/leo_bot/docking_path/plan/fiducial_2', Path, callback=self.path_callback_fiducial_2)
         rospy.Subscriber('/leo_bot/odometry', Odometry, callback=self.odom_callback)
         rospy.Subscriber('/leo_bot/daly_bms/data', BatteryStatus, callback=self.bms_callback)
+        rospy.Subscriber('/leo_bot/scan', LaserScan, self.scan_callback)
+        # rospy.Subscriber('/leo_bot/line_markers', Marker, callback=self.laser_line_callback)
         self._as = actionlib.SimpleActionServer(self._action_name, DockingAction, execute_cb=self.execute_cb, auto_start=False)
         self._as.start()
+        self.aruco_detection(False)
+
+    def aruco_detection(self, bool):
+        rospy.wait_for_service('/leo_bot/enable_detections')
+        try:
+            switch_aruco_detection = rospy.ServiceProxy('/leo_bot/enable_detections', SetBool)
+            resp1 = switch_aruco_detection(bool)
+            return resp1
+        except rospy.ServiceException as e:
+            print("Service call failed: %s"%e)
+
+    def scan_callback(self, scan_msg: LaserScan):
+        ranges = np.array(scan_msg.ranges)
+        angles = np.arange(scan_msg.angle_min, scan_msg.angle_max, scan_msg.angle_increment)
+        x1, y1 = self._robot_back_edges[0]
+        x2, y2 = self._robot_back_edges[1]
+
+        lx = ranges * np.cos(angles)
+        ly = ranges * np.sin(angles)
+
+        mask = np.logical_and(ly > y2, np.logical_and(ly < y1, np.logical_and(lx < x1, lx < x2)))
+        ranges_in_back = lx[mask] - x1
+
+        
+
+        if len(ranges_in_back) > 0:
+            self._min_dist_to_back = np.max(ranges_in_back)
+            # rospy.loginfo(f'Min distance in Backward : {self._min_dist_to_back}')
+            if(self._min_dist_to_back > -0.3):
+                self.back_obstacle_detector = True
+            else:
+                self.back_obstacle_detector = False
+       
+   
 
     def cancel_cb(self, msg: Empty):
         self._cancel = True
@@ -166,51 +210,84 @@ class Docking:
                 twist.angular.z = angular_velocity
                 self.cmd_vel_pub.publish(twist)
 
+    def move_backward(self, target_distance):
+        last_point_x = self.current_pose.position.x
+        last_point_y = self.current_pose.position.y
+        moved_distance = 0
+        while abs(moved_distance)< abs(target_distance) and not rospy.is_shutdown():
+            if (self.back_obstacle_detector == True):
+                self.cmd.linear.x = 0.0  # Adjust the linear velocity as needed
+                self.cmd.angular.z = 0.0
+                self.cmd_vel_pub.publish(self.cmd)
+                rospy.logerr("Obstcale detector in backward side !")
             
-
-    def execute_cb(self, goal: DockingGoal):
-        self.goal_aruco_id = goal.aruco_id
-        rate = rospy.Rate(self._freq)
-        self._feedback.feedback = f'Docking type: {goal.type} ArucoID: {goal.aruco_id} Started'
-        self._as.publish_feedback(self._feedback)
-        rospy.loginfo(f'{self._action_name} Started')
-        self._break = False
-        self.pre_point_reached = False
-        self.docking_point_reached = False
-        while not self._done and not self._break:
-            if self._as.is_preempt_requested():
-                rospy.loginfo(f'{self._action_name} Preemted')
-                self._as.set_preempted()
-                self._done = False
-                self.stop_motion()
-                break
-
-            if self._cancel:
-                rospy.loginfo(f'{self._action_name} Aborted')
-                self._as.set_preempted()
-                self._done = False
-                self._cancel = False
-                self.stop_motion()
-                break
-
-            if (self.pre_point_reached == False):
-                self.waypoint_index = 0
-                self.follow_path_fiducial_1()
-
             
-            if (self.pre_point_reached == True):
-                self.waypoint_index = 0
-                self.follow_path_fiducial_2()
-                time.sleep(1)
+            elif self.current_pose is not None:
+                current_x = self.current_pose.position.x
+                current_y = self.current_pose.position.y
+                
+                delta_distance = math.sqrt((current_x - last_point_x)**2 + (current_y - last_point_y)**2)
+                moved_distance += delta_distance
+                self.cmd.linear.x = -0.1  # Adjust the linear velocity as needed
+                self.cmd.angular.z = 0.0
+                self.cmd_vel_pub.publish(self.cmd)
+                last_point_x = current_x
+                last_point_y = current_y
             
-            if (self.is_charging):
-                self._done = True
-                self.stop_motion()
-                break
-            
-
+                
             rospy.sleep(0.067)
-            
+    
+           
+    def execute_cb(self, goal: DockingGoal):
+        self.aruco_follow_done = False
+        self.aruco_detection(True)
+        if(goal.type == "docking"):
+            self.goal_aruco_id = goal.aruco_id
+            rate = rospy.Rate(self._freq)
+            self._feedback.feedback = f'Docking type: {goal.type} ArucoID: {goal.aruco_id} Started'
+            self._as.publish_feedback(self._feedback)
+            rospy.loginfo(f'{self._action_name} Started')
+            self._break = False
+            self.pre_point_reached = False
+            self.docking_point_reached = False
+            while not self._done and not self._break and not rospy.is_shutdown():
+                if self._as.is_preempt_requested():
+                    rospy.loginfo(f'{self._action_name} Preemted')
+                    self._as.set_preempted()
+                    self._done = False
+                    self.stop_motion()
+                    break
+
+                if self._cancel:
+                    rospy.loginfo(f'{self._action_name} Aborted')
+                    self._as.set_preempted()
+                    self._done = False
+                    self._cancel = False
+                    self.stop_motion()
+                    break
+
+                if (self.pre_point_reached == False or self.is_charging == False):
+                    self.waypoint_index = 0
+                    self.follow_path_fiducial_1()
+
+                
+                # if (self.pre_point_reached == True):
+                #     self.waypoint_index = 0
+                #     self.follow_path_fiducial_2()
+                #     time.sleep(1)
+                #     self.aruco_follow_done = True
+                
+          
+                if (self.is_charging):
+                    self._done = True
+                    self.stop_motion()
+                    break
+                        
+                rospy.sleep(0.067)
+        
+        if(goal.type == "undocking"):
+            self.move_backward(0.4)
+            self._done = True
 
         if self._done:
             rospy.loginfo(f'{self._action_name} Succeeded')
@@ -218,6 +295,7 @@ class Docking:
             self._result.result = f'Docking type: {goal.type} ArucoID: {goal.aruco_id} Succeeded'
             self._as.set_succeeded(self._result)
             self.stop_motion()
+            self.aruco_detection(False)
             self._done = False
 
 
