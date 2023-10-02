@@ -49,7 +49,7 @@ class Docking:
         self._freq = freq
         self.detection_pub = rospy.Publisher("/leo_bot/ar_tag_detector/enable_detection" , Bool, queue_size= 1)
         self.cmd_vel_pub = rospy.Publisher("/leo_bot/cmd_vel" , Twist, queue_size= 1)
-        
+
         self._cancel = False
         self._break = False
 
@@ -88,7 +88,7 @@ class Docking:
         mask = np.logical_and(ly > y2, np.logical_and(ly < y1, np.logical_and(lx < x1, lx < x2)))
         ranges_in_back = lx[mask] - x1
 
-        
+
 
         if len(ranges_in_back) > 0:
             self._min_dist_to_back = np.max(ranges_in_back)
@@ -97,28 +97,28 @@ class Docking:
                 self.back_obstacle_detector = True
             else:
                 self.back_obstacle_detector = False
-       
-   
+
+
 
     def cancel_cb(self, msg: Empty):
         self._cancel = True
 
     def bms_callback(self, msg :BatteryStatus):
         self.is_charging = msg.is_charging
-    
+
     def stop_motion(self):
         self.cmd.linear.x = 0
         self.cmd.angular.z = 0
         self.cmd_vel_pub.publish(self.cmd)
-    
+
     def path_callback_fiducial_1(self, msg):
         self.path_fiducial_1 = msg
         self.path_received_fiducial_1 = True
-    
+
     def path_callback_fiducial_2(self, msg):
         self.path_fiducial_2 = msg
         self.path_received_fiducial_2 = True
-    
+
     def odom_callback(self, msg:Odometry):
         self.current_pose = msg.pose.pose
 
@@ -149,8 +149,8 @@ class Docking:
             if self.waypoint_index >= len(self.path_fiducial_1.poses):
                 rospy.loginfo("Reached the end of the fiducial 1")
                 self.pre_point_reached = True
-            
-            else:    
+
+            else:
                 waypoint_pose = self.path_fiducial_1.poses[self.waypoint_index]
 
                 x = self.current_pose.position.x
@@ -159,7 +159,7 @@ class Docking:
 
                 if distance < 0.2:
                     self.waypoint_index += 1
-                    
+
                 linear_error = distance
                 angular_error = self.get_heading_fiducial_1(x, y)
                 linear_velocity = self.kp_linear * linear_error - self.kd_linear * distance
@@ -188,8 +188,8 @@ class Docking:
             if self.waypoint_index >= len(self.path_fiducial_2.poses):
                 rospy.loginfo("Reached the end of the fiducial 2")
                 self.docking_point_reached = True
-            
-            else:    
+
+            else:
                 waypoint_pose = self.path_fiducial_2.poses[self.waypoint_index]
 
                 x = self.current_pose.position.x
@@ -198,7 +198,7 @@ class Docking:
 
                 if distance < 0.2:
                     self.waypoint_index += 1
-                    
+
                 linear_error = distance
                 angular_error = self.get_heading_fiducial_2(x, y)
                 linear_velocity = self.kp_linear * linear_error - self.kd_linear * distance
@@ -220,12 +220,12 @@ class Docking:
                 self.cmd.angular.z = 0.0
                 self.cmd_vel_pub.publish(self.cmd)
                 rospy.logerr("Obstcale detector in backward side !")
-            
-            
+
+
             elif self.current_pose is not None:
                 current_x = self.current_pose.position.x
                 current_y = self.current_pose.position.y
-                
+
                 delta_distance = math.sqrt((current_x - last_point_x)**2 + (current_y - last_point_y)**2)
                 moved_distance += delta_distance
                 self.cmd.linear.x = -0.1  # Adjust the linear velocity as needed
@@ -233,11 +233,11 @@ class Docking:
                 self.cmd_vel_pub.publish(self.cmd)
                 last_point_x = current_x
                 last_point_y = current_y
-            
-                
+
+
             rospy.sleep(0.067)
-    
-           
+
+
     def execute_cb(self, goal: DockingGoal):
         self.aruco_follow_done = False
         self.aruco_detection(True)
@@ -270,21 +270,21 @@ class Docking:
                     self.waypoint_index = 0
                     self.follow_path_fiducial_1()
 
-                
+
                 # if (self.pre_point_reached == True):
                 #     self.waypoint_index = 0
                 #     self.follow_path_fiducial_2()
                 #     time.sleep(1)
                 #     self.aruco_follow_done = True
-                
-          
+
+
                 if (self.is_charging):
                     self._done = True
                     self.stop_motion()
                     break
-                        
+
                 rospy.sleep(0.067)
-        
+
         if(goal.type == "undocking"):
             self.move_backward(0.4)
             self._done = True
@@ -305,4 +305,3 @@ if __name__ == '__main__':
     freq = rospy.get_param('rate', default=10)
     server = Docking(freq=freq)
     rospy.spin()
-    

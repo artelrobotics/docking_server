@@ -27,7 +27,7 @@ class SimplePathGen:
                 transform: TransformStamped = self._tf_buffer.lookup_transform(target_frame, source_frame, rospy.Time())
                 if not (rospy.Time.now() - rospy.Duration(self._transform_tolerance)) > transform.header.stamp:
                     return transform
-                else: 
+                else:
                     return None
             else:
                 None
