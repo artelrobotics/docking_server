@@ -5,20 +5,17 @@ import actionlib
 from std_msgs.msg import Empty
 from sensor_msgs.msg import LaserScan
 from docking_server.msg import DockingFeedback, DockingAction, DockingResult, DockingGoal
-from ar_track_alvar_msgs.msg import AlvarMarkers
 from std_msgs.msg import Bool
 from tf.transformations import euler_from_quaternion
-from math import degrees, atan2, pi, sqrt, atan
+from math import atan2, pi
 import math
-from geometry_msgs.msg import Twist , TransformStamped
-import time
+from geometry_msgs.msg import Twist
 import numpy as np
 import rospy
 from geometry_msgs.msg import Twist, Pose
 from std_msgs.msg import Float64
 from nav_msgs.msg import Path, Odometry
 from robotnik_msgs.msg import BatteryStatus
-import tf2_ros
 from std_srvs.srv import SetBool
 
 class Docking:
@@ -39,16 +36,13 @@ class Docking:
         self.kd_linear = 0.2
         self.kp_angular = 1.5
         self.kd_angular = 0.1
-        self._tf_buffer = tf2_ros.Buffer()
-        self._tf_listener = tf2_ros.TransformListener(self._tf_buffer)
         self.forward_bool = False
         self._feedback = DockingFeedback()
         self._result = DockingResult()
         self._done = False
         self._action_name = name
         self._freq = freq
-        self.detection_pub = rospy.Publisher("/leo_bot/ar_tag_detector/enable_detection" , Bool, queue_size= 1)
-        self.cmd_vel_pub = rospy.Publisher("/leo_bot/cmd_vel" , Twist, queue_size= 1)
+        self.cmd_vel_pub = rospy.Publisher("cmd_vel" , Twist, queue_size= 1)
 
         self._cancel = False
         self._break = False
@@ -56,21 +50,20 @@ class Docking:
         self.front_distance = Float64()
         self._robot_back_edges = rospy.get_param('robot_front_edges', [[-0.35, 0.32], [-0.35, -0.32]])
         self.back_obstacle_detector = False
-        rospy.Subscriber('cancel', Empty, callback=self.cancel_cb)
-        rospy.Subscriber('/leo_bot/docking_path/plan/fiducial_1', Path, callback=self.path_callback_fiducial_1)
-        rospy.Subscriber('/leo_bot/docking_path/plan/fiducial_2', Path, callback=self.path_callback_fiducial_2)
-        rospy.Subscriber('/leo_bot/odometry', Odometry, callback=self.odom_callback)
-        rospy.Subscriber('/leo_bot/daly_bms/data', BatteryStatus, callback=self.bms_callback)
-        rospy.Subscriber('/leo_bot/scan', LaserScan, self.scan_callback)
+        rospy.Subscriber('~cancel', Empty, callback=self.cancel_cb)
+        rospy.Subscriber('docking_path/plan/fiducial_1', Path, callback=self.path_callback_fiducial_1)
+        rospy.Subscriber('odometry', Odometry, callback=self.odom_callback)
+        rospy.Subscriber('daly_bms/data', BatteryStatus, callback=self.bms_callback)
+        rospy.Subscriber('scan', LaserScan, self.scan_callback)
         # rospy.Subscriber('/leo_bot/line_markers', Marker, callback=self.laser_line_callback)
         self._as = actionlib.SimpleActionServer(self._action_name, DockingAction, execute_cb=self.execute_cb, auto_start=False)
         self._as.start()
         self.aruco_detection(False)
 
     def aruco_detection(self, bool):
-        rospy.wait_for_service('/leo_bot/enable_detections')
+        rospy.wait_for_service('enable_detections')
         try:
-            switch_aruco_detection = rospy.ServiceProxy('/leo_bot/enable_detections', SetBool)
+            switch_aruco_detection = rospy.ServiceProxy('enable_detections', SetBool)
             resp1 = switch_aruco_detection(bool)
             return resp1
         except rospy.ServiceException as e:
@@ -114,10 +107,6 @@ class Docking:
     def path_callback_fiducial_1(self, msg):
         self.path_fiducial_1 = msg
         self.path_received_fiducial_1 = True
-
-    def path_callback_fiducial_2(self, msg):
-        self.path_fiducial_2 = msg
-        self.path_received_fiducial_2 = True
 
     def odom_callback(self, msg:Odometry):
         self.current_pose = msg.pose.pose
@@ -171,44 +160,6 @@ class Docking:
                 twist.angular.z = angular_velocity
                 self.cmd_vel_pub.publish(twist)
 
-    def get_heading_fiducial_2(self, x, y):
-        _, _, yaw = euler_from_quaternion([self.current_pose.orientation.x,
-                                           self.current_pose.orientation.y,
-                                           self.current_pose.orientation.z,
-                                           self.current_pose.orientation.w])
-        path_x = self.path_fiducial_2.poses[self.waypoint_index].pose.position.x
-        path_y = self.path_fiducial_2.poses[self.waypoint_index].pose.position.y
-        path_heading = atan2(path_y - y, path_x - x)
-
-        return self.normalize(path_heading - yaw)
-
-    def follow_path_fiducial_2(self):
-        # while not rospy.is_shutdown():
-        if self.path_received_fiducial_2:
-            if self.waypoint_index >= len(self.path_fiducial_2.poses):
-                rospy.loginfo("Reached the end of the fiducial 2")
-                self.docking_point_reached = True
-
-            else:
-                waypoint_pose = self.path_fiducial_2.poses[self.waypoint_index]
-
-                x = self.current_pose.position.x
-                y = self.current_pose.position.y
-                distance = self.get_distance(x, y, waypoint_pose.pose.position.x, waypoint_pose.pose.position.y)
-
-                if distance < 0.2:
-                    self.waypoint_index += 1
-
-                linear_error = distance
-                angular_error = self.get_heading_fiducial_2(x, y)
-                linear_velocity = self.kp_linear * linear_error - self.kd_linear * distance
-                angular_velocity = self.kp_angular * angular_error - self.kd_angular * angular_error
-
-                # Create and publish Twist message
-                twist = Twist()
-                twist.linear.x = linear_velocity
-                twist.angular.z = angular_velocity
-                self.cmd_vel_pub.publish(twist)
 
     def move_backward(self, target_distance):
         last_point_x = self.current_pose.position.x
@@ -269,13 +220,6 @@ class Docking:
                 if (self.pre_point_reached == False or self.is_charging == False):
                     self.waypoint_index = 0
                     self.follow_path_fiducial_1()
-
-
-                # if (self.pre_point_reached == True):
-                #     self.waypoint_index = 0
-                #     self.follow_path_fiducial_2()
-                #     time.sleep(1)
-                #     self.aruco_follow_done = True
 
 
                 if (self.is_charging):
