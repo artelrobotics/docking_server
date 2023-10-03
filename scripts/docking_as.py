@@ -52,9 +52,7 @@ class Docking:
         self.back_obstacle_detector = False
         rospy.Subscriber('~cancel', Empty, callback=self.cancel_cb)
         rospy.Subscriber('docking_path/plan/fiducial_1', Path, callback=self.path_callback_fiducial_1)
-        rospy.Subscriber('odometry', Odometry, callback=self.odom_callback)
         rospy.Subscriber('daly_bms/data', BatteryStatus, callback=self.bms_callback)
-        rospy.Subscriber('scan', LaserScan, self.scan_callback)
         # rospy.Subscriber('/leo_bot/line_markers', Marker, callback=self.laser_line_callback)
         self._as = actionlib.SimpleActionServer(self._action_name, DockingAction, execute_cb=self.execute_cb, auto_start=False)
         self._as.start()
@@ -68,29 +66,6 @@ class Docking:
             return resp1
         except rospy.ServiceException as e:
             print("Service call failed: %s"%e)
-
-    def scan_callback(self, scan_msg: LaserScan):
-        ranges = np.array(scan_msg.ranges)
-        angles = np.arange(scan_msg.angle_min, scan_msg.angle_max, scan_msg.angle_increment)
-        x1, y1 = self._robot_back_edges[0]
-        x2, y2 = self._robot_back_edges[1]
-
-        lx = ranges * np.cos(angles)
-        ly = ranges * np.sin(angles)
-
-        mask = np.logical_and(ly > y2, np.logical_and(ly < y1, np.logical_and(lx < x1, lx < x2)))
-        ranges_in_back = lx[mask] - x1
-
-
-
-        if len(ranges_in_back) > 0:
-            self._min_dist_to_back = np.max(ranges_in_back)
-            # rospy.loginfo(f'Min distance in Backward : {self._min_dist_to_back}')
-            if(self._min_dist_to_back > -0.3):
-                self.back_obstacle_detector = True
-            else:
-                self.back_obstacle_detector = False
-
 
 
     def cancel_cb(self, msg: Empty):
@@ -161,34 +136,6 @@ class Docking:
                 self.cmd_vel_pub.publish(twist)
 
 
-    def move_backward(self, target_distance):
-        last_point_x = self.current_pose.position.x
-        last_point_y = self.current_pose.position.y
-        moved_distance = 0
-        while abs(moved_distance)< abs(target_distance) and not rospy.is_shutdown():
-            if (self.back_obstacle_detector == True):
-                self.cmd.linear.x = 0.0  # Adjust the linear velocity as needed
-                self.cmd.angular.z = 0.0
-                self.cmd_vel_pub.publish(self.cmd)
-                rospy.logerr("Obstcale detector in backward side !")
-
-
-            elif self.current_pose is not None:
-                current_x = self.current_pose.position.x
-                current_y = self.current_pose.position.y
-
-                delta_distance = math.sqrt((current_x - last_point_x)**2 + (current_y - last_point_y)**2)
-                moved_distance += delta_distance
-                self.cmd.linear.x = -0.1  # Adjust the linear velocity as needed
-                self.cmd.angular.z = 0.0
-                self.cmd_vel_pub.publish(self.cmd)
-                last_point_x = current_x
-                last_point_y = current_y
-
-
-            rospy.sleep(0.067)
-
-
     def execute_cb(self, goal: DockingGoal):
         self.aruco_follow_done = False
         self.aruco_detection(True)
@@ -229,9 +176,6 @@ class Docking:
 
                 rospy.sleep(0.067)
 
-        if(goal.type == "undocking"):
-            self.move_backward(0.4)
-            self._done = True
 
         if self._done:
             rospy.loginfo(f'{self._action_name} Succeeded')
