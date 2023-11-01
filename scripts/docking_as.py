@@ -18,7 +18,7 @@ from nav_msgs.msg import Path, Odometry
 from robotnik_msgs.msg import BatteryStatus
 from std_srvs.srv import SetBool
 from dynamic_reconfigure.server import Server
-from docking_server.cfg import Config
+from docking_server.cfg import ConfigConfig
 class Docking:
 
     def __init__(self, name='DockingServer', freq=10):
@@ -55,7 +55,7 @@ class Docking:
         rospy.Subscriber('docking_path/plan/fiducial_1', Path, callback=self.path_callback_fiducial_1)
         rospy.Subscriber('daly_bms/data', BatteryStatus, callback=self.bms_callback)
         # rospy.Subscriber('/leo_bot/line_markers', Marker, callback=self.laser_line_callback)
-        self.reconfigure = Server(Docking_as_Config, self.reconfigure_callback)
+        self.reconfigure = Server(ConfigConfig, self.reconfigure_callback)
         rospy.logerr("Server initialized reconfigure")
         self._as = actionlib.SimpleActionServer(self._action_name, DockingAction, execute_cb=self.execute_cb, auto_start=False)
         self._as.start()
