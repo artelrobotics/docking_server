@@ -17,7 +17,8 @@ from std_msgs.msg import Float64
 from nav_msgs.msg import Path, Odometry
 from robotnik_msgs.msg import BatteryStatus
 from std_srvs.srv import SetBool
-
+from dynamic_reconfigure.server import Server
+from docking_server.cfg import Config
 class Docking:
 
     def __init__(self, name='DockingServer', freq=10):
@@ -33,9 +34,9 @@ class Docking:
         self.waypoint_index = 0
         self.pre_point_reached = False
         self.kp_linear = 0.3
-        self.kd_linear = 0.2
-        self.kp_angular = 1.5
-        self.kd_angular = 0.1
+        self.kd_linear = 0.05
+        self.kp_angular = 0.3
+        self.kd_angular = 0.05
         self.forward_bool = False
         self._feedback = DockingFeedback()
         self._result = DockingResult()
@@ -54,9 +55,19 @@ class Docking:
         rospy.Subscriber('docking_path/plan/fiducial_1', Path, callback=self.path_callback_fiducial_1)
         rospy.Subscriber('daly_bms/data', BatteryStatus, callback=self.bms_callback)
         # rospy.Subscriber('/leo_bot/line_markers', Marker, callback=self.laser_line_callback)
+        self.reconfigure = Server(Docking_as_Config, self.reconfigure_callback)
+        rospy.logerr("Server initialized reconfigure")
         self._as = actionlib.SimpleActionServer(self._action_name, DockingAction, execute_cb=self.execute_cb, auto_start=False)
         self._as.start()
         self.aruco_detection(False)
+
+    def reconfigure_callback(self, config, level):
+        self.kp_linear = config.kp_linear
+        self.kd_linear = config.kd_linear
+        self.kp_angular = config.kp_angular
+        self.kd_angular = config.kd_angular
+        rospy.loginfo(f'{self.kp_angular, self.kd_linear} reconfigured')
+        return config
 
     def aruco_detection(self, bool):
         rospy.wait_for_service('enable_detections')
@@ -174,7 +185,7 @@ class Docking:
                     self.stop_motion()
                     break
 
-                rospy.sleep(0.067)
+                rospy.sleep(0.1)
 
 
         if self._done:

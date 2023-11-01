@@ -13,9 +13,9 @@ class SimplePathGen:
     def __init__(self) -> None:
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer)
-        self._marker_frame = rospy.get_param('~marker_frame', default='ar_marker_2')
-        self._base_frame = rospy.get_param('~robot_frame', default='leo_bot/base_link')
-        self._world_frame = rospy.get_param('~world_frame', default='leo_bot/odom')
+        self._marker_frame = rospy.get_param('~marker_frame', default='fiducial_1')
+        self._base_frame = rospy.get_param('~robot_frame', default='camel_amr_500_001/base_footprint')
+        self._world_frame = rospy.get_param('~world_frame', default='camel_amr_500_001/odom')
         self._interval = rospy.get_param('~interval', default=0.05)
         self._transform_tolerance = rospy.get_param('~transform_tolerance', default=0.5)
         self._path_pub = rospy.Publisher(f'docking_path/plan/{self._marker_frame}', Path, queue_size=1)
