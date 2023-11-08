@@ -1,5 +1,4 @@
 #! /usr/bin/env python3
-
 import rospy
 import actionlib
 from std_msgs.msg import Empty
@@ -19,6 +18,8 @@ from robotnik_msgs.msg import BatteryStatus
 from std_srvs.srv import SetBool
 from dynamic_reconfigure.server import Server
 from docking_server.cfg import ConfigConfig
+from laser_line_extraction.msg import LineSegmentList
+
 class Docking:
 
     def __init__(self, name='DockingServer', freq=10):
@@ -33,14 +34,15 @@ class Docking:
         self.path_received = False
         self.waypoint_index = 0
         self.pre_point_reached = False
-        self.kp_linear = 0.3
-        self.kd_linear = 0.05
-        self.kp_angular = 0.3
-        self.kd_angular = 0.05
+        self.kp_linear = 0.1
+        self.kd_linear = 0.01
+        self.kp_angular = 0.7
+        self.kd_angular = 0.1
         self.forward_bool = False
         self._feedback = DockingFeedback()
         self._result = DockingResult()
         self._done = False
+        self.cart_found = False
         self._action_name = name
         self._freq = freq
         self.cmd_vel_pub = rospy.Publisher("cmd_vel" , Twist, queue_size= 1)
@@ -54,12 +56,46 @@ class Docking:
         rospy.Subscriber('~cancel', Empty, callback=self.cancel_cb)
         rospy.Subscriber('docking_path/plan/fiducial_1', Path, callback=self.path_callback_fiducial_1)
         rospy.Subscriber('daly_bms/data', BatteryStatus, callback=self.bms_callback)
-        # rospy.Subscriber('/leo_bot/line_markers', Marker, callback=self.laser_line_callback)
+        rospy.Subscriber('line_segments', LineSegmentList, callback=self.line_segments)
+        rospy.Subscriber('odometry', Odometry, callback=self.odom_callback)
         self.reconfigure = Server(ConfigConfig, self.reconfigure_callback)
         rospy.logerr("Server initialized reconfigure")
         self._as = actionlib.SimpleActionServer(self._action_name, DockingAction, execute_cb=self.execute_cb, auto_start=False)
         self._as.start()
         self.aruco_detection(False)
+
+    def line_segments(self, data):
+        len_of_segments = len(data.line_segments)
+        if (len_of_segments == 2):
+            left_line_middle_x = (data.line_segments[0].start[0] + data.line_segments[0].end[0]) / 2
+            left_line_middle_y = (data.line_segments[0].start[1] + data.line_segments[0].end[1]) / 2
+            right_line_middle_x = (data.line_segments[1].start[0] + data.line_segments[1].end[0]) / 2
+            right_line_middle_y = (data.line_segments[1].start[1] + data.line_segments[1].end[1]) / 2
+            
+            # if (left_line_middle_y)
+            print("Left x and y:", left_line_middle_x, left_line_middle_y)  
+            print("Right x and y:", right_line_middle_x, right_line_middle_y)
+            
+
+            self.center_x = (right_line_middle_x + left_line_middle_x)/2
+            self.center_y = right_line_middle_y + left_line_middle_y
+
+            # print("Center X and Y :", center_x, center_y)
+            self.cart_found = True
+        # else:
+        #     # self.cart_found = False
+
+    def go_inside_cart(self):
+        if (self.center_x > 0.1 and self.cart_found == True):
+            self.cmd.linear.x = 0.1
+            self.cmd.angular.z = 0.5 * self.center_y
+            self.cmd_vel_pub.publish(self.cmd)
+        elif(self.center_x <= 0.1):
+            self.cmd.linear.x = 0.0
+            self.cmd.angular.z = 0.0
+            self.cmd_vel_pub.publish(self.cmd)
+
+
 
     def reconfigure_callback(self, config, level):
         self.kp_linear = config.kp_linear
@@ -179,6 +215,8 @@ class Docking:
                     self.waypoint_index = 0
                     self.follow_path_fiducial_1()
 
+                if (self.goal_aruco_id == 1 and self.pre_point_reached == True and self.cart_found == True):
+                    self.go_inside_cart()
 
                 if (self.is_charging):
                     self._done = True
