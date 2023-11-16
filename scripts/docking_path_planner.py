@@ -3,7 +3,7 @@
 import rospy
 from nav_msgs.msg import Path
 from geometry_msgs.msg import TransformStamped, PoseStamped, Quaternion, Point, Transform, Vector3
-from std_msgs.msg import Header
+from std_msgs.msg import Header, Float64
 import tf2_ros
 import numpy as np
 import tf2_geometry_msgs

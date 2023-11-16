@@ -19,6 +19,9 @@ from std_srvs.srv import SetBool
 from dynamic_reconfigure.server import Server
 from docking_server.cfg import ConfigConfig
 from laser_line_extraction.msg import LineSegmentList
+import time
+from fiducial_msgs.msg import FiducialTransformArray 
+import dynamic_reconfigure.client
 
 class Docking:
 
@@ -55,48 +58,25 @@ class Docking:
         self.back_obstacle_detector = False
         rospy.Subscriber('~cancel', Empty, callback=self.cancel_cb)
         rospy.Subscriber('docking_path/plan/fiducial_1', Path, callback=self.path_callback_fiducial_1)
+        rospy.Subscriber('docking_path/plan/fiducial_2', Path, callback=self.path_callback_fiducial_2)
         rospy.Subscriber('daly_bms/data', BatteryStatus, callback=self.bms_callback)
-        rospy.Subscriber('line_segments', LineSegmentList, callback=self.line_segments)
+        rospy.Subscriber('fiducial_transforms', FiducialTransformArray, callback=self.fiducial_distance_callback)
+        self.hook_ctrl = rospy.ServiceProxy('hooks_ctrl', SetBool)
+        # rospy.Subscriber('line_segments', LineSegmentList, callback=self.line_segments)
         rospy.Subscriber('odometry', Odometry, callback=self.odom_callback)
         self.reconfigure = Server(ConfigConfig, self.reconfigure_callback)
+        self.client_local = dynamic_reconfigure.client.Client("/camel_amr_500_001/move_base/local_costmap", timeout=30, config_callback=self.callback)
+        self.client_global = dynamic_reconfigure.client.Client("/camel_amr_500_001/move_base/global_costmap", timeout=30, config_callback=self.callback)
         rospy.logerr("Server initialized reconfigure")
         self._as = actionlib.SimpleActionServer(self._action_name, DockingAction, execute_cb=self.execute_cb, auto_start=False)
         self._as.start()
         self.aruco_detection(False)
-
-    def line_segments(self, data):
-        len_of_segments = len(data.line_segments)
-        if (len_of_segments == 2):
-            left_line_middle_x = (data.line_segments[0].start[0] + data.line_segments[0].end[0]) / 2
-            left_line_middle_y = (data.line_segments[0].start[1] + data.line_segments[0].end[1]) / 2
-            right_line_middle_x = (data.line_segments[1].start[0] + data.line_segments[1].end[0]) / 2
-            right_line_middle_y = (data.line_segments[1].start[1] + data.line_segments[1].end[1]) / 2
-            
-            # if (left_line_middle_y)
-            print("Left x and y:", left_line_middle_x, left_line_middle_y)  
-            print("Right x and y:", right_line_middle_x, right_line_middle_y)
-            
-
-            self.center_x = (right_line_middle_x + left_line_middle_x)/2
-            self.center_y = right_line_middle_y + left_line_middle_y
-
-            # print("Center X and Y :", center_x, center_y)
-            self.cart_found = True
-        # else:
-        #     # self.cart_found = False
-
-    def go_inside_cart(self):
-        if (self.center_x > 0.1 and self.cart_found == True):
-            self.cmd.linear.x = 0.1
-            self.cmd.angular.z = 0.5 * self.center_y
-            self.cmd_vel_pub.publish(self.cmd)
-        elif(self.center_x <= 0.1):
-            self.cmd.linear.x = 0.0
-            self.cmd.angular.z = 0.0
-            self.cmd_vel_pub.publish(self.cmd)
-
-
-
+        self.fiducial_2_distance = 100
+        self.hook = False
+        
+    def callback(self ,config):
+        rospy.loginfo("Local Footprint Config set to ".format(**config))
+    
     def reconfigure_callback(self, config, level):
         self.kp_linear = config.kp_linear
         self.kd_linear = config.kd_linear
@@ -104,6 +84,25 @@ class Docking:
         self.kd_angular = config.kd_angular
         rospy.loginfo(f'{self.kp_angular, self.kd_linear} reconfigured')
         return config
+
+    def hook_service(self, bool):
+        time.sleep(3)
+        self.hook_ctrl(bool)
+        if bool:
+            self.client_local.update_configuration({"footprint":[[-0.75,-0.75],[-0.75,0.75],[0.75,0.75],[0.75,-0.75]]})
+            self.client_global.update_configuration({"footprint":[[-0.75,-0.75],[-0.75,0.75],[0.75,0.75],[0.75,-0.75]]})
+        if not bool:
+            self.client_local.update_configuration({"footprint":[[-0.647,-0.42],[-0.647,0.42],[0.647,0.42],[0.647,-0.42]]})
+            self.client_global.update_configuration({"footprint":[[-0.647,-0.42],[-0.647,0.42],[0.647,0.42],[0.647,-0.42]]})
+        time.sleep(3)
+        self.hook = bool
+
+    
+    def fiducial_distance_callback(self, msg):
+        for tf in msg.transforms:
+            if (tf.fiducial_id == 2):
+                self.fiducial_2_distance = tf.transform.translation.z
+           
 
     def aruco_detection(self, bool):
         rospy.wait_for_service('enable_detections')
@@ -126,9 +125,22 @@ class Docking:
         self.cmd.angular.z = 0
         self.cmd_vel_pub.publish(self.cmd)
 
+    def backward_motion(self, duration):
+        initial_time = time.time()
+        now = time.time()
+        while(now - initial_time < duration):
+            self.cmd.linear.x = -0.2
+            self.cmd.angular.z = 0
+            self.cmd_vel_pub.publish(self.cmd)
+            now = time.time()
+
     def path_callback_fiducial_1(self, msg):
         self.path_fiducial_1 = msg
         self.path_received_fiducial_1 = True
+
+    def path_callback_fiducial_2(self, msg):
+        self.path_fiducial_2 = msg
+        self.path_received_fiducial_2 = True
 
     def odom_callback(self, msg:Odometry):
         self.current_pose = msg.pose.pose
@@ -182,10 +194,52 @@ class Docking:
                 twist.angular.z = angular_velocity
                 self.cmd_vel_pub.publish(twist)
 
+    def get_heading_fiducial_2(self, x, y):
+        _, _, yaw = euler_from_quaternion([self.current_pose.orientation.x,
+                                           self.current_pose.orientation.y,
+                                           self.current_pose.orientation.z,
+                                           self.current_pose.orientation.w])
+        path_x = self.path_fiducial_2.poses[self.waypoint_index_2].pose.position.x
+        path_y = self.path_fiducial_2.poses[self.waypoint_index_2].pose.position.y
+        path_heading = atan2(path_y - y, path_x - x)
+        
+
+        return self.normalize(path_heading - yaw)
+
+    def follow_path_fiducial_2(self):
+        if self.path_received_fiducial_2:
+            if self.waypoint_index_2 >= len(self.path_fiducial_2.poses):
+                rospy.loginfo("Reached the end of the fiducial 2")
+                self.pre_point_reached = True
+
+            else:
+                waypoint_pose = self.path_fiducial_2.poses[self.waypoint_index_2]
+
+                x = self.current_pose.position.x
+                y = self.current_pose.position.y
+                
+                distance = self.get_distance(x, y, waypoint_pose.pose.position.x, waypoint_pose.pose.position.y)
+
+                if distance < 0.2:
+                    self.waypoint_index_2 += 1
+
+                linear_error = distance
+                angular_error = self.get_heading_fiducial_2(x, y)
+                linear_velocity = self.kp_linear * linear_error - self.kd_linear * distance
+                angular_velocity = self.kp_angular * angular_error - self.kd_angular * angular_error
+
+                # Create and publish Twist message
+                twist = Twist()
+                twist.linear.x = linear_velocity
+                twist.angular.z = angular_velocity
+                self.cmd_vel_pub.publish(twist)
+
+
 
     def execute_cb(self, goal: DockingGoal):
         self.aruco_follow_done = False
         self.aruco_detection(True)
+        self.fiducial_2_distance = 100
         if(goal.type == "docking"):
             self.goal_aruco_id = goal.aruco_id
             rate = rospy.Rate(self._freq)
@@ -211,21 +265,64 @@ class Docking:
                     self.stop_motion()
                     break
 
-                if (self.pre_point_reached == False or self.is_charging == False):
+                if (self.pre_point_reached == False):
                     self.waypoint_index = 0
                     self.follow_path_fiducial_1()
 
-                if (self.goal_aruco_id == 1 and self.pre_point_reached == True and self.cart_found == True):
-                    self.go_inside_cart()
+                if (self.pre_point_reached == True ):
+                    print(self.fiducial_2_distance)
+                    if(self.fiducial_2_distance < 1.0 and self.hook == False):
+                        self.hook_service(True)
+                    
+                    if(self.fiducial_2_distance < 0.4 and self.hook):
+                        self._done = True
+                        self.stop_motion()
+                        break
 
-                if (self.is_charging):
-                    self._done = True
-                    self.stop_motion()
-                    break
+                    self.waypoint_index_2 = 0
+                    self.follow_path_fiducial_2()
+
 
                 rospy.sleep(0.1)
 
+        if (goal.type == "undocking"):
+            self.aruco_detection(True)
+            self._feedback.feedback = f'UnDocking type: {goal.type} ArucoID: {goal.aruco_id} Started'
+            self._as.publish_feedback(self._feedback)
+            rospy.loginfo(f'Undocking Started')
+            self._break = False
+            self.fiducial_2_distance = 10
+            while not self._done and not self._break and not rospy.is_shutdown():
+                if self._as.is_preempt_requested():
+                    rospy.loginfo(f'{self._action_name} Preemted')
+                    self._as.set_preempted()
+                    self._done = False
+                    self.stop_motion()
+                    break
 
+                if self._cancel:
+                    rospy.loginfo(f'{self._action_name} Aborted')
+                    self._as.set_preempted()
+                    self._done = False
+                    self._cancel = False
+                    self.stop_motion()
+                    break
+                
+                if(self.fiducial_2_distance < 0.7):
+                    print(self.fiducial_2_distance)
+                    print("backward_motion")
+                    self.hook_service(False)
+                    self.backward_motion(10)
+                    self._done = True
+                    break
+                
+                else:
+                    self.waypoint_index_2 = 0
+                    self.follow_path_fiducial_2()
+
+                rospy.sleep(0.1)              
+
+                
         if self._done:
             rospy.loginfo(f'{self._action_name} Succeeded')
             self._result.done = self._done
@@ -238,7 +335,7 @@ class Docking:
 
 
 if __name__ == '__main__':
-    rospy.init_node('docking')
+    rospy.init_node('docking_as')
     freq = rospy.get_param('rate', default=10)
     server = Docking(freq=freq)
     rospy.spin()
