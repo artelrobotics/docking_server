@@ -59,6 +59,7 @@ class Docking:
         rospy.Subscriber('~cancel', Empty, callback=self.cancel_cb)
         rospy.Subscriber('docking_path/plan/fiducial_1', Path, callback=self.path_callback_fiducial_1)
         rospy.Subscriber('docking_path/plan/fiducial_2', Path, callback=self.path_callback_fiducial_2)
+        rospy.Subscriber('docking_path/plan/fiducial_3', Path, callback=self.path_callback_fiducial_3)
         rospy.Subscriber('daly_bms/data', BatteryStatus, callback=self.bms_callback)
         rospy.Subscriber('fiducial_transforms', FiducialTransformArray, callback=self.fiducial_distance_callback)
         self.hook_ctrl = rospy.ServiceProxy('hooks_ctrl', SetBool)
@@ -102,6 +103,10 @@ class Docking:
         for tf in msg.transforms:
             if (tf.fiducial_id == 2):
                 self.fiducial_2_distance = tf.transform.translation.z
+            
+            if (tf.fiducial_id == 3):
+                self.fiducial_3_distance = tf.transform.translation.z
+            
            
 
     def aruco_detection(self, bool):
@@ -141,6 +146,10 @@ class Docking:
     def path_callback_fiducial_2(self, msg):
         self.path_fiducial_2 = msg
         self.path_received_fiducial_2 = True
+
+    def path_callback_fiducial_3(self, msg):
+        self.path_fiducial_3 = msg
+        self.path_received_fiducial_3 = True
 
     def odom_callback(self, msg:Odometry):
         self.current_pose = msg.pose.pose
@@ -234,6 +243,45 @@ class Docking:
                 twist.angular.z = angular_velocity
                 self.cmd_vel_pub.publish(twist)
 
+    def get_heading_fiducial_3(self, x, y):
+        _, _, yaw = euler_from_quaternion([self.current_pose.orientation.x,
+                                           self.current_pose.orientation.y,
+                                           self.current_pose.orientation.z,
+                                           self.current_pose.orientation.w])
+        path_x = self.path_fiducial_3.poses[self.waypoint_index_3].pose.position.x
+        path_y = self.path_fiducial_3.poses[self.waypoint_index_3].pose.position.y
+        path_heading = atan2(path_y - y, path_x - x)
+        
+
+        return self.normalize(path_heading - yaw)
+
+    def follow_path_fiducial_3(self):
+        if self.path_received_fiducial_3:
+            if self.waypoint_index_3 >= len(self.path_fiducial_3.poses):
+                rospy.loginfo("Reached the end of the fiducial 3")
+                self.pre_point_reached = True
+
+            else:
+                waypoint_pose = self.path_fiducial_3.poses[self.waypoint_index_3]
+
+                x = self.current_pose.position.x
+                y = self.current_pose.position.y
+                
+                distance = self.get_distance(x, y, waypoint_pose.pose.position.x, waypoint_pose.pose.position.y)
+
+                if distance < 0.2:
+                    self.waypoint_index_2 += 1
+
+                linear_error = distance
+                angular_error = self.get_heading_fiducial_3(x, y)
+                linear_velocity = self.kp_linear * linear_error - self.kd_linear * distance
+                angular_velocity = self.kp_angular * angular_error - self.kd_angular * angular_error
+
+                # Create and publish Twist message
+                twist = Twist()
+                twist.linear.x = linear_velocity
+                twist.angular.z = angular_velocity
+                self.cmd_vel_pub.publish(twist)
 
 
     def execute_cb(self, goal: DockingGoal):
@@ -319,6 +367,41 @@ class Docking:
                 else:
                     self.waypoint_index_2 = 0
                     self.follow_path_fiducial_2()
+
+                rospy.sleep(0.1)              
+
+        if (goal.type == "charging" and goal.aruco_id==3):
+            self.aruco_detection(True)
+            self._feedback.feedback = f'UnDocking type: {goal.type} ArucoID: {goal.aruco_id} Started'
+            self._as.publish_feedback(self._feedback)
+            rospy.loginfo(f'Dock to charging station started')
+            self._break = False
+            self.fiducial_3_distance = 10
+            while not self._done and not self._break and not rospy.is_shutdown():
+                if self._as.is_preempt_requested():
+                    rospy.loginfo(f'{self._action_name} Preemted')
+                    self._as.set_preempted()
+                    self._done = False
+                    self.stop_motion()
+                    break
+
+                if self._cancel:
+                    rospy.loginfo(f'{self._action_name} Aborted')
+                    self._as.set_preempted()
+                    self._done = False
+                    self._cancel = False
+                    self.stop_motion()
+                    break
+
+                print(self.fiducial_3_distance)
+                if(self.fiducial_3_distance > 0.7):
+                    self.waypoint_index_3 = 0
+                    self.follow_path_fiducial_3()
+                
+                if(self.is_charging):
+                        self._done = True
+                        break
+                
 
                 rospy.sleep(0.1)              
 
