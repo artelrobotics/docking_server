@@ -66,8 +66,12 @@ class Docking:
         # rospy.Subscriber('line_segments', LineSegmentList, callback=self.line_segments)
         rospy.Subscriber('odometry', Odometry, callback=self.odom_callback)
         self.reconfigure = Server(ConfigConfig, self.reconfigure_callback)
-        self.client_local = dynamic_reconfigure.client.Client("/camel_amr_500_001/move_base/local_costmap", timeout=30, config_callback=self.callback)
-        self.client_global = dynamic_reconfigure.client.Client("/camel_amr_500_001/move_base/global_costmap", timeout=30, config_callback=self.callback)
+        # try:
+        self.client_local = dynamic_reconfigure.client.Client("/camel_amr_500_001/move_base/local_costmap", timeout=300, config_callback=self.callback)
+        self.client_global = dynamic_reconfigure.client.Client("/camel_amr_500_001/move_base/global_costmap", timeout=300, config_callback=self.callback)
+        # except Exception as e:
+        #     rospy.logwarn(f'Error occured as : {e}')
+            
         rospy.logerr("Server initialized reconfigure")
         self._as = actionlib.SimpleActionServer(self._action_name, DockingAction, execute_cb=self.execute_cb, auto_start=False)
         self._as.start()
@@ -356,7 +360,7 @@ class Docking:
                     self.stop_motion()
                     break
                 
-                if(self.fiducial_2_distance < 0.7):
+                if(self.fiducial_2_distance < 1.0):
                     print(self.fiducial_2_distance)
                     print("backward_motion")
                     self.hook_service(False)
